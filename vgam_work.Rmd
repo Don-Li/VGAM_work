@@ -3,6 +3,13 @@ title: "VGAM Adventures"
 author: "Don Li and Ellen Li"
 date: "01/12/2020"
 output: html_document
+knit: (
+  function(inputFile, encoding) { 
+    rmarkdown::render( 
+      input       = inputFile, 
+      encoding    = encoding, 
+      output_file = "index.html")
+    })
 ---
 
 ```{r setup, include=FALSE}
@@ -21,7 +28,8 @@ We will use an ordinal multinomial example using the `pneumo` data frame, which 
 
 From what I think I understand, we're using a cumulative link function (default is `log` link in `acat`). 
 
-```{r}
+```{r warning=FALSE}
+library( devtools )
 library( VGAM )
 
 example_output = capture.output( example(acat) )

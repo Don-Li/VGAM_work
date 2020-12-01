@@ -9,7 +9,7 @@
 <meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
 
 
-<meta name="author" content="Ellen Li and Don Li" />
+<meta name="author" content="Don Li and Ellen Li" />
 
 <meta name="date" content="2020-01-12" />
 
@@ -364,7 +364,7 @@ summary {
 
 
 <h1 class="title toc-ignore">VGAM Adventures</h1>
-<h4 class="author">Ellen Li and Don Li</h4>
+<h4 class="author">Don Li and Ellen Li</h4>
 <h4 class="date">01/12/2020</h4>
 
 </div>
@@ -378,6 +378,8 @@ summary {
 <h3>Existing solution</h3>
 <p>We will use an ordinal multinomial example using the <code>pneumo</code> data frame, which contains 8 rows (observations) and 4 columns. The model fits the ordinal response category (<code>normal</code> &lt; <code>mild</code> &lt; <code>severe</code>) as a function of the <code>let = log(exposure.time)</code>.</p>
 <p>From what I think I understand, we’re using a cumulative link function (default is <code>log</code> link in <code>acat</code>).</p>
+<pre class="r"><code>library( devtools )</code></pre>
+<pre><code>## Loading required package: usethis</code></pre>
 <pre class="r"><code>library( VGAM )</code></pre>
 <pre><code>## Loading required package: stats4</code></pre>
 <pre><code>## Loading required package: splines</code></pre>
@@ -515,8 +517,9 @@ chol(wzar[,,1])  # Same as UU[, 1]</code></pre>
 <li>Instead of doing the double conversion of matrix-band (<code>wzedd</code>) -&gt; square matrix (<code>vchol</code>) -&gt; matrix-band (<code>UU</code>), we can skip the last one by making a version of <code>mux111</code> that can accept an array of square matrices.</li>
 <li>Use <code>armadillo</code> to abstract away the single/double loops as vector operations to improve readability/maintainability.</li>
 </ul>
-<pre class="r"><code>library( Rcpp )
-sourceCpp( &quot;cpp_stuff.cpp&quot; )
+<pre class="r"><code>library( Rcpp )</code></pre>
+<pre><code>## Warning: package &#39;Rcpp&#39; was built under R version 3.6.3</code></pre>
+<pre class="r"><code>sourceCpp( &quot;cpp_implementations.cpp&quot; )
 
 wz_weights = wweights( fit, matrix.arg = TRUE, deriv.arg = FALSE )
 N = nobs(fit)
@@ -574,12 +577,12 @@ all( wzar_cpp_all == VGAM_solutions$wzar )</code></pre>
     times = 10000
 )</code></pre>
 <pre><code>## Unit: microseconds
-##  expr  min   lq     mean median    uq    max neval
-##  VGAM 38.6 42.8 58.43073   45.0 58.15 5066.2 10000
-##  cpp1  3.7  4.5  6.57649    5.0  5.90 2774.4 10000
-##  cpp2  6.7  7.3  9.81113    7.9  9.00 1202.8 10000
-##  cpp3  7.9  8.7 12.40811    9.4 10.80 3303.3 10000
-##  cpp4  7.8  8.6 11.46244    9.3 10.70 1122.3 10000</code></pre>
+##  expr  min   lq     mean median   uq    max neval
+##  VGAM 33.2 36.7 42.33287   37.9 40.1 9441.5 10000
+##  cpp1  3.3  4.1  5.23348    4.5  5.3 2592.8 10000
+##  cpp2  6.7  7.5  8.56454    7.9  8.9  784.6 10000
+##  cpp3  8.0  8.7 10.40453    9.3 10.5 3122.0 10000
+##  cpp4  7.8  8.6  9.79894    9.1 10.2  799.2 10000</code></pre>
 <p>So, it looks like using the matrix/cube indexing is not faster. I think it is because I am taking non-contiguous matrix subviews. It’s too hard to change this, so I’ll just leave it. There is room to improve the <code>m2a_cpp</code> because I’m not very good at c++.</p>
 </div>
 <div id="proposed-solutions-2" class="section level3">
@@ -635,10 +638,10 @@ all( UU.X.vlm_cpp2 == UU.X.vlm )</code></pre>
     times = 1000
 )</code></pre>
 <pre><code>## Unit: microseconds
-##   expr  min    lq     mean median     uq     max neval
-##   VGAM 42.2 45.50  62.1991   48.1  60.80  2606.0  1000
-##  VGAM2 83.2 89.85 136.6376   94.6 127.95 16176.4  1000
-##    cpp  7.6 10.00  15.3601   11.5  13.85  1348.0  1000</code></pre>
+##   expr  min   lq    mean median    uq     max neval
+##   VGAM 41.1 42.8 58.3707   44.7 47.00 12103.0  1000
+##  VGAM2 76.2 79.5 88.7654   81.7 84.95  4178.5  1000
+##    cpp  6.6  7.7 10.6713   10.0 10.70   945.4  1000</code></pre>
 <p>We see that the c++ implementation is faster. It also is doing the Cholesky decomposition, whereas it is precomputed for the VGAM solution as <code>UU</code>.</p>
 </div>
 </div>
