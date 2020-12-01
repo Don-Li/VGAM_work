@@ -1,0 +1,195 @@
+---
+title: "VGAM Adventures"
+author: "Ellen Li and Don Li"
+date: "01/12/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+We have been given a quest by the VGAM Lord Thomas Yee (t-yeezy) to improve some of the matrix multiplication in VGAM.
+
+The particular problem is transforming a band-format matrix, doing Cholesky decomposition for each of the resulting square matrices, and multiplying it with a design matrix. 
+
+### Existing solution
+
+We will use an ordinal multinomial example using the `pneumo` data frame, which contains 8 rows (observations) and 4 columns. The model fits the ordinal response category (`normal` < `mild` < `severe`) as a function of the `let = log(exposure.time)`. 
+
+From what I think I understand, we're using a cumulative link function (default is `log` link in `acat`). 
+
+```{r}
+library( VGAM )
+
+example_output = capture.output( example(acat) )
+
+# Dataset
+pneumo
+# Model
+fit
+```
+
+We now extract the model dimensions and the working weights.
+
+```{r}
+M <- npred(fit)
+nn <- nobs(fit)
+wzedd <- weights(fit, type = "working")
+# UU is matrix-band format
+UU <- vchol(wzedd, M = M, n = nn, silent = TRUE)
+X.vlm <- model.matrix(fit, type = "vlm")
+UU.X.vlm <- mux111(cc = UU, xmat = X.vlm, M = M)
+UU.X.vlm
+```
+
+The underlying computations in `vchol` appear to be:
+
+```{r}
+# Convert rows of weights matrix to square matrix
+    # Matrix-band format
+wzar <- m2a(wzedd, M = M)
+wzar[,,1]
+# Do the Cholesky decomposition
+chol(wzar[,,1])  # Same as UU[, 1]
+
+# Notes:
+    # vchol also has a thing where it does a correction if the decomposition fails
+```
+
+Inside `mux111`, it appears to reconstruct the square matrices from `UU` to do the matrix multiplication with the corresponding rows of `X.vlm`. Some notes from Thomas:
+
+```{r}
+mux111 <- function(cc, xmat, M, upper = TRUE) {
+# 19990813
+#
+# 20170605: some modifications to get hdeff() going.
+
+# Input:
+# 1. cc is dimm x n, where dimm is
+#    usually M or M(M+1)/2, e.g., is output from vchol().
+#    That is, cc is some matrix in matrix-band format.
+# 2. xmat is n*M x R. Each sub-block is M x R and is
+#    multiplied by each column of cc.
+#
+# Output:
+# 1. (n*M) x R matrix, such that, in old notation,
+#    ans[1:M, ] <- cc[, , 1] %*% xmat[1:M, ], etc.
+#
+# Notes:
+# 1. It is specifically geared to vglm.fit(), and is a special case
+#    of mux11().
+# 2. If M = 1 then cc cannot be simply be a vector.
+#    20170605; not sure about the above line.
+# 3. NAs in xmat and/or cc are okay.
+# 4. cc represents an upper-triangular matrix by default, but if not
+#    then it is symmetric (set upper = FALSE).
+
+   if (!is.matrix(xmat))
+     xmat <- as.matrix(xmat)
+   if (!is.matrix(cc))
+     cc <- t(as.matrix(cc))
+   R <- ncol(xmat)
+   n <- nrow(xmat) / M
+   index <- iam(NA, NA, M, both = TRUE, diag = TRUE)
+   dimm.value <- nrow(cc)  # Usually M or M(M+1)/2
+
+   fred <- .C("mux111ccc",
+              as.double(cc), b = as.double(t(xmat)),
+              as.integer(M), as.integer(R), as.integer(n),
+              wkcc = double(M * M), wk2 = double(M * R),
+              as.integer(index$row), as.integer(index$col),
+              as.integer(dimm.value),
+              as.integer(upper), NAOK = TRUE)
+
+   ans <- fred$b
+   dim(ans) <- c(R, n * M)
+   d <- dimnames(xmat)
+   dimnames(ans) <- list(d[[2]], d[[1]])
+   t(ans)
+}
+```
+
+Make a list of solutions for testing.
+
+```{r}
+VGAM_solutions = list(
+    wzedd = wzedd,
+    wzar = wzar,
+    UU = UU,
+    UU.X.vlm = UU.X.vlm
+)
+```
+
+### Proposed solutions
+
+* Instead of doing the double conversion of matrix-band (`wzedd`) -> square matrix (`vchol`) -> matrix-band (`UU`), we can skip the last one by making a version of `mux111` that can accept an array of square matrices.
+* Use `armadillo` to abstract away the single/double loops as vector operations to improve readability/maintainability.
+
+```{r}
+library( Rcpp )
+sourceCpp( "cpp_stuff.cpp" )
+
+wz_weights = wweights( fit, matrix.arg = TRUE, deriv.arg = FALSE )
+N = nobs(fit)
+pred_dim = npred(fit)
+index <- iam(NA, NA, pred_dim, both = TRUE, diag = TRUE)
+
+# We begin with a solution that does a double loop.
+    # First loop iterates over N observations
+        # Assigns diagonals from matrix band to the return array
+    # Second loop iterates to assign the non-diagonal elements
+wzar_cpp = m2a_cpp( wz_weights, pred_dim, 0, 
+    index$row.index-1, index$col.index-1 )
+
+all( wzar_cpp == VGAM_solutions$wzar )
+
+# Alternative solution for one row that uses matrix indexing
+N = nrow( wz_weights )
+n_triangular_elements = 1/2 * ( sqrt( 8 * ncol(wz_weights) + 1 ) - 1 )
+index_matrix = cbind( index$row.index, index$col.index )
+
+wzar_cpp_single = sapply( 1:N, function( N_ ){
+    result = m2a_cpp_1( wz_weights, t(index_matrix-1), 0,
+        n_triangular_elements, N_ - 1 )
+    result == VGAM_solutions$wzar[,,N_]
+} )
+
+all( wzar_cpp_single )
+
+# Extend this result by looping over N in c++
+wzar_cpp_all = m2a_cpp_x( wz_weights, t(index_matrix-1), 0,
+    n_triangular_elements, N )
+all( wzar_cpp_all == VGAM_solutions$wzar )
+
+# An alternative to above, but instead of indexing the
+    # return array as x.slice.index, we try to use the cube indexing
+wzar_cpp_all2 = m2a_cpp_x2( wz_weights, rbind(t(index_matrix-1),0), 0,
+    n_triangular_elements, N )
+all( wzar_cpp_all == VGAM_solutions$wzar )
+
+```
+
+Time for some benchmarking:
+```{r}
+microbenchmark::microbenchmark(
+    # Standard
+    VGAM = m2a(wzedd, M = M),
+    # c++, but with double loop
+    cpp1 = m2a_cpp( wz_weights, pred_dim, 0, 
+        index$row.index-1, index$col.index-1 ),
+    # c++ but using matrix indexing
+    cpp2 = m2a_cpp_x( wz_weights, t(index_matrix-1), 0,
+        n_triangular_elements, N ),
+    # c++ but using cube indexing
+    cpp3 = m2a_cpp_x2( wz_weights, rbind(t(index_matrix-1),0), 0,
+        n_triangular_elements, N ),
+    cpp4 = m2a_cpp_x3( wz_weights, rbind(t(index_matrix-1),0), 0,
+        n_triangular_elements, N ),
+    times = 10000
+)
+```
+
+So, it looks like using the matrix/cube indexing is not faster. I think it is because I am taking non-contiguous matrix subviews. It's too hard to change this, so I'll just leave it. There is room to improve the `m2a_cpp` because I'm not very good at c++.
