@@ -1,6 +1,6 @@
 ---
 title: "VGAM Adventures"
-author: "Ellen Li and Don Li"
+author: "Don Li and Ellen Li"
 date: "01/12/2020"
 output: html_document
 ---
@@ -130,7 +130,7 @@ VGAM_solutions = list(
 
 ```{r}
 library( Rcpp )
-sourceCpp( "cpp_stuff.cpp" )
+sourceCpp( "cpp_implementations.cpp" )
 
 wz_weights = wweights( fit, matrix.arg = TRUE, deriv.arg = FALSE )
 N = nobs(fit)
