@@ -211,7 +211,7 @@ head(xmat)
 Now, we want to do the Cholesky decomposition for each `wz_weights` submatrix and then multiply the `xmat` submatrices.
 
 ```{r}
-UU.X.vlm_cpp = do.call( rbind, lapply( 1:n, function(n_){
+UU.X.vlm_cpp = do.call( rbind, lapply( 1:N, function(n_){
     chol(wzar_cpp[,,n_]) %*% xmat_array[,,n_]
 } ) )
 # As required
@@ -231,9 +231,13 @@ Some benchmarking
 ```{r}
 microbenchmark::microbenchmark(
     VGAM = mux111(cc = UU, xmat = X.vlm, M = M),
+    VGAM2 = {
+        UU <- vchol(wzedd, M = M, n = nn, silent = TRUE)
+        mux111(cc = UU, xmat = X.vlm, M = M)
+    },
     cpp = mux111ccc_cpp( wz_weights, xmat, pred_dim, 0,
     index$row.index-1, index$col.index-1 ),
-    times = 1000, check = function(v){ all(v$VGAM == v$cpp) }
+    times = 1000
 )
 ```
 

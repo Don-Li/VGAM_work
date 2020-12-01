@@ -574,13 +574,72 @@ all( wzar_cpp_all == VGAM_solutions$wzar )</code></pre>
     times = 10000
 )</code></pre>
 <pre><code>## Unit: microseconds
-##  expr  min   lq     mean median   uq    max neval
-##  VGAM 36.2 41.1 50.76489   42.5 45.2 4353.5 10000
-##  cpp1  3.5  4.3  5.92894    4.7  5.5 3508.4 10000
-##  cpp2  6.1  7.0  9.41595    7.3  8.4 3564.6 10000
-##  cpp3  7.4  8.4 10.79717    8.9 10.2 2273.1 10000
-##  cpp4  7.4  8.3 10.64852    8.8 10.0 2840.7 10000</code></pre>
+##  expr  min   lq     mean median    uq    max neval
+##  VGAM 38.6 42.8 58.43073   45.0 58.15 5066.2 10000
+##  cpp1  3.7  4.5  6.57649    5.0  5.90 2774.4 10000
+##  cpp2  6.7  7.3  9.81113    7.9  9.00 1202.8 10000
+##  cpp3  7.9  8.7 12.40811    9.4 10.80 3303.3 10000
+##  cpp4  7.8  8.6 11.46244    9.3 10.70 1122.3 10000</code></pre>
 <p>So, it looks like using the matrix/cube indexing is not faster. I think it is because I am taking non-contiguous matrix subviews. It’s too hard to change this, so I’ll just leave it. There is room to improve the <code>m2a_cpp</code> because I’m not very good at c++.</p>
+</div>
+<div id="proposed-solutions-2" class="section level3">
+<h3>Proposed solutions 2</h3>
+<p>Next part of our solution is to separate the design matrix into components for matrix multiplication with the <code>chol(wz_weights)</code>.</p>
+<pre class="r"><code>xmat = model.matrix(fit, type = &quot;vlm&quot;)
+xmat_array = xmat_to_array( xmat, pred_dim )
+xmat_array[,,1:2]</code></pre>
+<pre><code>## , , 1
+## 
+##      [,1] [,2]     [,3]     [,4]
+## [1,]    1    0 1.757858 0.000000
+## [2,]    0    1 0.000000 1.757858
+## 
+## , , 2
+## 
+##      [,1] [,2]    [,3]    [,4]
+## [1,]    1    0 2.70805 0.00000
+## [2,]    0    1 0.00000 2.70805</code></pre>
+<pre class="r"><code>head(xmat)</code></pre>
+<pre><code>##     (Intercept):1 (Intercept):2    let:1    let:2
+## 1:1             1             0 1.757858 0.000000
+## 1:2             0             1 0.000000 1.757858
+## 2:1             1             0 2.708050 0.000000
+## 2:2             0             1 0.000000 2.708050
+## 3:1             1             0 3.068053 0.000000
+## 3:2             0             1 0.000000 3.068053</code></pre>
+</div>
+<div id="proposed-solution-3" class="section level3">
+<h3>Proposed solution 3</h3>
+<p>Now, we want to do the Cholesky decomposition for each <code>wz_weights</code> submatrix and then multiply the <code>xmat</code> submatrices.</p>
+<pre class="r"><code>UU.X.vlm_cpp = do.call( rbind, lapply( 1:N, function(n_){
+    chol(wzar_cpp[,,n_]) %*% xmat_array[,,n_]
+} ) )
+# As required
+all( UU.X.vlm == UU.X.vlm_cpp )</code></pre>
+<pre><code>## [1] TRUE</code></pre>
+<p>And we just do it in c++ instead of R.</p>
+<pre class="r"><code>UU.X.vlm_cpp2 = mux111ccc_cpp( wz_weights, xmat, pred_dim, 0,
+    index$row.index-1, index$col.index-1 )
+# As required
+all( UU.X.vlm_cpp2 == UU.X.vlm )</code></pre>
+<pre><code>## [1] TRUE</code></pre>
+<p>Some benchmarking</p>
+<pre class="r"><code>microbenchmark::microbenchmark(
+    VGAM = mux111(cc = UU, xmat = X.vlm, M = M),
+    VGAM2 = {
+        UU &lt;- vchol(wzedd, M = M, n = nn, silent = TRUE)
+        mux111(cc = UU, xmat = X.vlm, M = M)
+    },
+    cpp = mux111ccc_cpp( wz_weights, xmat, pred_dim, 0,
+    index$row.index-1, index$col.index-1 ),
+    times = 1000
+)</code></pre>
+<pre><code>## Unit: microseconds
+##   expr  min    lq     mean median     uq     max neval
+##   VGAM 42.2 45.50  62.1991   48.1  60.80  2606.0  1000
+##  VGAM2 83.2 89.85 136.6376   94.6 127.95 16176.4  1000
+##    cpp  7.6 10.00  15.3601   11.5  13.85  1348.0  1000</code></pre>
+<p>We see that the c++ implementation is faster. It also is doing the Cholesky decomposition, whereas it is precomputed for the VGAM solution as <code>UU</code>.</p>
 </div>
 </div>
 
