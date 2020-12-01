@@ -193,3 +193,48 @@ microbenchmark::microbenchmark(
 ```
 
 So, it looks like using the matrix/cube indexing is not faster. I think it is because I am taking non-contiguous matrix subviews. It's too hard to change this, so I'll just leave it. There is room to improve the `m2a_cpp` because I'm not very good at c++.
+
+### Proposed solutions 2
+
+Next part of our solution is to separate the design matrix into components for matrix multiplication with the `chol(wz_weights)`.
+
+```{r}
+xmat = model.matrix(fit, type = "vlm")
+xmat_array = xmat_to_array( xmat, pred_dim )
+xmat_array[,,1:2]
+
+head(xmat)
+```
+
+### Proposed solution 3
+
+Now, we want to do the Cholesky decomposition for each `wz_weights` submatrix and then multiply the `xmat` submatrices.
+
+```{r}
+UU.X.vlm_cpp = do.call( rbind, lapply( 1:n, function(n_){
+    chol(wzar_cpp[,,n_]) %*% xmat_array[,,n_]
+} ) )
+# As required
+all( UU.X.vlm == UU.X.vlm_cpp )
+```
+
+And we just do it in c++ instead of R.
+
+```{r}
+UU.X.vlm_cpp2 = mux111ccc_cpp( wz_weights, xmat, pred_dim, 0,
+    index$row.index-1, index$col.index-1 )
+# As required
+all( UU.X.vlm_cpp2 == UU.X.vlm )
+```
+
+Some benchmarking
+```{r}
+microbenchmark::microbenchmark(
+    VGAM = mux111(cc = UU, xmat = X.vlm, M = M),
+    cpp = mux111ccc_cpp( wz_weights, xmat, pred_dim, 0,
+    index$row.index-1, index$col.index-1 ),
+    times = 1000, check = function(v){ all(v$VGAM == v$cpp) }
+)
+```
+
+We see that the c++ implementation is faster. It also is doing the Cholesky decomposition, whereas it is precomputed for the VGAM solution as `UU`.

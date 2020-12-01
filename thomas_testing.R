@@ -59,6 +59,7 @@ wz_weights_chol_array = m2a_R( t( wz_weights_chol ), M, TRUE )
 xmat_array = design_matrix_to_array_R( xmat, y_dim = M, n_obs = n )
 
 
+
 design_matrix = xmat
 y_dim = M
 n_obs = n

@@ -135,12 +135,12 @@ arma::dmat mux111ccc_cpp( arma::dmat matrix_, arma::dmat xmat, int dim_matrix, i
         row_index, col_index);
     arma::cube x_array = xmat_to_array( xmat, dim_matrix );
     
-    arma::dmat return_matrix( xmat.n_cols, xmat.n_rows );
+    arma::dmat return_matrix( xmat.n_rows, xmat.n_cols );
     
     for ( int i = 0; i < matrix_.n_rows; i++ ){
         arma::mat K = weight_array.slice(i);
-        return_matrix.cols( i * dim_matrix, (i+1) * dim_matrix - 1 ) = 
-            arma::trans( arma::chol(K) * x_array.slice(i) );
+        return_matrix.rows( i * dim_matrix, (i+1) * dim_matrix - 1 ) = 
+            arma::chol(K) * x_array.slice(i);
     }
     
     return return_matrix;
