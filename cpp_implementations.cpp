@@ -39,6 +39,36 @@ arma::cube m2a_cpp( arma::dmat matrix_, int dim_matrix, int upper_triangular,
 }
 
 // [[Rcpp::export]]
+arma::cube m2a_cpp_new( arma::dmat matrix_, int dim_matrix, int upper_triangular,
+    arma::ucolvec row_index, arma::ucolvec col_index ){
+
+    int N = matrix_.n_rows;
+    arma::cube return_array(dim_matrix, dim_matrix, N, arma::fill::zeros);
+
+    //  I think temporary assignment might be slow?
+
+    int row_id = row_index(0);
+    int col_id = col_index(0);
+
+    for ( arma::uword ilocal = 0; ilocal < N; ilocal++ ){
+        for ( arma::uword jlocal = 0; jlocal < row_index.n_rows; jlocal++ ){
+            row_id = row_index(jlocal);
+            col_id = col_index(jlocal);
+
+                if ( upper_triangular == 0 ){
+                    return_array(row_id, col_id, ilocal) =
+                        return_array(col_id, row_id, ilocal) =
+                            matrix_(ilocal, jlocal);
+                } else{
+                    return_array(row_id, col_id, ilocal) =
+                        matrix_(ilocal, jlocal);
+                }
+        }
+    }
+    return return_array;
+}
+
+// [[Rcpp::export]]
 arma::dmat m2a_cpp_1( arma::dmat band_matrix, arma::umat index_matrix, 
     int upper_triangular, int n_triangular_elements, int band_row ){
     
@@ -146,3 +176,61 @@ arma::dmat mux111ccc_cpp( arma::dmat matrix_, arma::dmat xmat, int dim_matrix, i
     return return_matrix;
 }
 
+// [[Rcpp::export]]
+arma::dmat mux111ccc_cpp_( arma::dmat matrix_, arma::dmat xmat, int dim_matrix, int upper_triangular,
+    arma::ucolvec row_index, arma::ucolvec col_index ){
+    
+    int N = matrix_.n_rows;
+
+    int row_id = row_index(0);
+    int col_id = col_index(0);
+
+    arma::dmat return_matrix( xmat.n_rows, xmat.n_cols, arma::fill::zeros );
+    arma::dmat temp_matrix( dim_matrix, dim_matrix, arma::fill::zeros );
+    
+    int return_slices = xmat.n_rows / dim_matrix;
+    int return_rows = xmat.n_rows / return_slices;
+
+    for ( int i = 0; i < matrix_.n_rows; i++ ){
+        for ( arma::uword jlocal = 0; jlocal < row_index.n_rows; jlocal++ ){
+            row_id = row_index(jlocal);
+            col_id = col_index(jlocal);
+
+                if ( upper_triangular == 0 ){
+                    temp_matrix(row_id, col_id) =
+                        temp_matrix(col_id, row_id) =
+                            matrix_(i, jlocal);
+                } else{
+                    temp_matrix(row_id, col_id) =
+                        matrix_(i, jlocal);
+                }
+        }
+                
+        return_matrix.rows( i * dim_matrix, (i+1) * dim_matrix - 1 ) = 
+            // arma::chol(weight_array.slice(i)) * x_array.slice(i);
+            arma::chol(temp_matrix) *
+                xmat.rows( i * return_rows, (i + 1) * return_rows - 1 );
+    }
+    
+    return return_matrix;
+}
+
+// [[Rcpp::export]]
+arma::dmat mux111ccc_cpp2( arma::dmat matrix_, arma::dmat xmat, int dim_matrix, arma::umat index_matrix, 
+    int upper_triangular,
+    int n_triangular_elements, int N ){
+    
+    arma::cube weight_array = m2a_cpp_x( matrix_, index_matrix, upper_triangular,
+        n_triangular_elements, N);
+    arma::cube x_array = xmat_to_array( xmat, dim_matrix );
+    
+    arma::dmat return_matrix( xmat.n_rows, xmat.n_cols );
+    
+    for ( int i = 0; i < matrix_.n_rows; i++ ){
+        arma::mat K = weight_array.slice(i);
+        return_matrix.rows( i * dim_matrix, (i+1) * dim_matrix - 1 ) = 
+            arma::chol(K) * x_array.slice(i);
+    }
+    
+    return return_matrix;
+}

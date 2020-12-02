@@ -517,9 +517,8 @@ chol(wzar[,,1])  # Same as UU[, 1]</code></pre>
 <li>Instead of doing the double conversion of matrix-band (<code>wzedd</code>) -&gt; square matrix (<code>vchol</code>) -&gt; matrix-band (<code>UU</code>), we can skip the last one by making a version of <code>mux111</code> that can accept an array of square matrices.</li>
 <li>Use <code>armadillo</code> to abstract away the single/double loops as vector operations to improve readability/maintainability.</li>
 </ul>
-<pre class="r"><code>library( Rcpp )</code></pre>
-<pre><code>## Warning: package &#39;Rcpp&#39; was built under R version 3.6.3</code></pre>
-<pre class="r"><code>sourceCpp( &quot;cpp_implementations.cpp&quot; )
+<pre class="r"><code>library( Rcpp )
+sourceCpp( &quot;cpp_implementations.cpp&quot; )
 
 wz_weights = wweights( fit, matrix.arg = TRUE, deriv.arg = FALSE )
 N = nobs(fit)
@@ -560,11 +559,18 @@ wzar_cpp_all2 = m2a_cpp_x2( wz_weights, rbind(t(index_matrix-1),0), 0,
 all( wzar_cpp_all == VGAM_solutions$wzar )</code></pre>
 <pre><code>## [1] TRUE</code></pre>
 <p>Time for some benchmarking:</p>
-<pre class="r"><code>microbenchmark::microbenchmark(
+<pre class="r"><code># sourceCpp( &quot;cpp_implementations.cpp&quot; )
+
+wz_weights = wweights( fit, matrix.arg = TRUE, deriv.arg = FALSE )
+N = 8
+
+microbenchmark::microbenchmark(
     # Standard
-    VGAM = m2a(wzedd, M = M),
+    VGAM = m2a(wz_weights, M = pred_dim),
     # c++, but with double loop
     cpp1 = m2a_cpp( wz_weights, pred_dim, 0, 
+        index$row.index-1, index$col.index-1 ),
+    cpp12 = m2a_cpp_new( wz_weights, pred_dim, 0, 
         index$row.index-1, index$col.index-1 ),
     # c++ but using matrix indexing
     cpp2 = m2a_cpp_x( wz_weights, t(index_matrix-1), 0,
@@ -577,18 +583,53 @@ all( wzar_cpp_all == VGAM_solutions$wzar )</code></pre>
     times = 10000
 )</code></pre>
 <pre><code>## Unit: microseconds
-##  expr  min   lq     mean median   uq    max neval
-##  VGAM 33.2 36.7 42.33287   37.9 40.1 9441.5 10000
-##  cpp1  3.3  4.1  5.23348    4.5  5.3 2592.8 10000
-##  cpp2  6.7  7.5  8.56454    7.9  8.9  784.6 10000
-##  cpp3  8.0  8.7 10.40453    9.3 10.5 3122.0 10000
-##  cpp4  7.8  8.6  9.79894    9.1 10.2  799.2 10000</code></pre>
+##   expr  min   lq     mean median   uq    max neval
+##   VGAM 39.2 44.6 64.71365   47.8 63.3 5005.5 10000
+##   cpp1  3.7  4.5  7.15740    5.0  6.1 3169.4 10000
+##  cpp12  3.2  3.9  6.01339    4.3  5.4 1876.3 10000
+##   cpp2  7.2  8.2 12.31069    8.8 10.1 4195.4 10000
+##   cpp3  8.7  9.7 13.77574   10.6 12.3 1302.9 10000
+##   cpp4  8.5  9.5 13.55257   10.4 12.1 1143.2 10000</code></pre>
 <p>So, it looks like using the matrix/cube indexing is not faster. I think it is because I am taking non-contiguous matrix subviews. It’s too hard to change this, so I’ll just leave it. There is room to improve the <code>m2a_cpp</code> because I’m not very good at c++.</p>
+<div id="other-issues" class="section level4">
+<h4>Other issues</h4>
+<p>I should have looked at the scaling. It turns out if we scale up the input (band format) matrix, our fast solutions turn out to be really slow.</p>
+<p>Submatrix views are nice to program, but get very slow when N increases.</p>
+<pre class="r"><code>wz_weights = wz_weights[ rep( 1: 8, each = 10000 ), ]
+N = nrow(wz_weights)
+
+microbenchmark::microbenchmark(
+    # Standard
+    VGAM = m2a(wz_weights, M = pred_dim),
+    # c++, but with double loop
+    cpp1 = m2a_cpp( wz_weights, pred_dim, 0, 
+        index$row.index-1, index$col.index-1 ),
+    cpp12 = m2a_cpp_new( wz_weights, pred_dim, 0, 
+        index$row.index-1, index$col.index-1 ),
+    # c++ but using matrix indexing
+    # cpp2 = m2a_cpp_x( wz_weights, t(index_matrix-1), 0,
+    #     n_triangular_elements, N ),
+    # c++ but using cube indexing
+    # cpp3 = m2a_cpp_x2( wz_weights, rbind(t(index_matrix-1),0), 0,
+    #     n_triangular_elements, N ),
+    # cpp4 = m2a_cpp_x3( wz_weights, rbind(t(index_matrix-1),0), 0,
+    #     n_triangular_elements, N ),
+    times = 100
+)</code></pre>
+<pre><code>## Unit: milliseconds
+##   expr     min      lq      mean   median       uq     max neval
+##   VGAM  2.2727  2.6430  4.475432  3.16635  5.17215 13.4041   100
+##   cpp1 21.0820 22.6625 25.869747 24.04800 27.89590 46.3528   100
+##  cpp12  3.4784  4.1511  5.968601  4.75235  5.70915 71.1899   100</code></pre>
+</div>
 </div>
 <div id="proposed-solutions-2" class="section level3">
 <h3>Proposed solutions 2</h3>
 <p>Next part of our solution is to separate the design matrix into components for matrix multiplication with the <code>chol(wz_weights)</code>.</p>
-<pre class="r"><code>xmat = model.matrix(fit, type = &quot;vlm&quot;)
+<pre class="r"><code>wz_weights = wweights( fit, matrix.arg = TRUE, deriv.arg = FALSE )
+N = nrow( wz_weights )
+
+xmat = model.matrix(fit, type = &quot;vlm&quot;)
 xmat_array = xmat_to_array( xmat, pred_dim )
 xmat_array[,,1:2]</code></pre>
 <pre><code>## , , 1
@@ -638,11 +679,54 @@ all( UU.X.vlm_cpp2 == UU.X.vlm )</code></pre>
     times = 1000
 )</code></pre>
 <pre><code>## Unit: microseconds
-##   expr  min   lq    mean median    uq     max neval
-##   VGAM 41.1 42.8 58.3707   44.7 47.00 12103.0  1000
-##  VGAM2 76.2 79.5 88.7654   81.7 84.95  4178.5  1000
-##    cpp  6.6  7.7 10.6713   10.0 10.70   945.4  1000</code></pre>
+##   expr  min   lq     mean median     uq     max neval
+##   VGAM 47.6 51.0  93.8386   53.5  61.90 28192.9  1000
+##  VGAM2 89.6 97.1 128.5661  101.0 124.75  6462.1  1000
+##    cpp  7.0  8.7  15.3344   10.6  12.10  2418.9  1000</code></pre>
 <p>We see that the c++ implementation is faster. It also is doing the Cholesky decomposition, whereas it is precomputed for the VGAM solution as <code>UU</code>.</p>
+</div>
+<div id="big-dataset" class="section level3">
+<h3>Big dataset</h3>
+<pre class="r"><code>library( VGAM )
+library( Rcpp )
+sourceCpp( &quot;cpp_implementations.cpp&quot; )
+
+pneumo &lt;- transform(pneumo, let = log(exposure.time))
+
+big_data_vglm = vglm(formula = cbind(normal, mild, severe) ~ let, 
+    family = acat, 
+    data = pneumo[rep(1:8, 1000),])
+big_M &lt;- npred(big_data_vglm)
+big_nn &lt;- nobs(big_data_vglm)
+big_wzedd &lt;- weights(big_data_vglm, type = &quot;working&quot;)
+# UU is matrix-band format
+big_UU &lt;- vchol(big_wzedd, M = big_M, n = big_nn, silent = TRUE)
+big_X.vlm &lt;- model.matrix(big_data_vglm, type = &quot;vlm&quot;)
+big_UU.X.vlm &lt;- mux111(cc = big_UU, xmat = big_X.vlm, M = big_M)
+index &lt;- iam(NA, NA, big_M, both = TRUE, diag = TRUE)
+
+N = nrow( big_wzedd )
+n_triangular_elements = 1/2 * ( sqrt( 8 * ncol(big_wzedd) + 1 ) - 1 )
+index_matrix = cbind( index$row.index, index$col.index )
+
+microbenchmark::microbenchmark(
+    # VGAM = mux111(cc = big_UU, xmat = big_X.vlm, M = big_M),
+    VGAM2 = {
+        UU &lt;- vchol(big_wzedd, M = big_M, n = big_nn, silent = TRUE)
+        mux111(cc = big_UU, xmat = big_X.vlm, M = big_M)
+    },
+    # cpp = mux111ccc_cpp( big_wzedd, big_X.vlm, big_M, 0,
+    #     index$row.index-1, index$col.index-1 ),
+    cpp_ = mux111ccc_cpp_( big_wzedd, big_X.vlm, big_M, 0,
+        index$row.index-1, index$col.index-1 ),
+    # cpp2 = mux111ccc_cpp2( big_wzedd, big_X.vlm, big_M, t(index_matrix-1), 0,
+    #     n_triangular_elements, N ),
+    times = 100
+)</code></pre>
+<pre><code>## Unit: microseconds
+##   expr    min      lq     mean median      uq    max neval
+##  VGAM2  956.4 1057.15 1448.306 1146.7 1464.20 5645.4   100
+##   cpp_ 1613.2 1883.65 2336.108 2157.8 2621.65 5535.6   100</code></pre>
 </div>
 </div>
 

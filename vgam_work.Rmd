@@ -182,11 +182,18 @@ all( wzar_cpp_all == VGAM_solutions$wzar )
 
 Time for some benchmarking:
 ```{r}
+# sourceCpp( "cpp_implementations.cpp" )
+
+wz_weights = wweights( fit, matrix.arg = TRUE, deriv.arg = FALSE )
+N = 8
+
 microbenchmark::microbenchmark(
     # Standard
-    VGAM = m2a(wzedd, M = M),
+    VGAM = m2a(wz_weights, M = pred_dim),
     # c++, but with double loop
     cpp1 = m2a_cpp( wz_weights, pred_dim, 0, 
+        index$row.index-1, index$col.index-1 ),
+    cpp12 = m2a_cpp_new( wz_weights, pred_dim, 0, 
         index$row.index-1, index$col.index-1 ),
     # c++ but using matrix indexing
     cpp2 = m2a_cpp_x( wz_weights, t(index_matrix-1), 0,
@@ -202,11 +209,44 @@ microbenchmark::microbenchmark(
 
 So, it looks like using the matrix/cube indexing is not faster. I think it is because I am taking non-contiguous matrix subviews. It's too hard to change this, so I'll just leave it. There is room to improve the `m2a_cpp` because I'm not very good at c++.
 
+#### Other issues
+
+I should have looked at the scaling. It turns out if we scale up the input (band format) matrix, our fast solutions turn out to be really slow.
+
+Submatrix views are nice to program, but get very slow when N increases.
+
+```{r}
+wz_weights = wz_weights[ rep( 1: 8, each = 10000 ), ]
+N = nrow(wz_weights)
+
+microbenchmark::microbenchmark(
+    # Standard
+    VGAM = m2a(wz_weights, M = pred_dim),
+    # c++, but with double loop
+    cpp1 = m2a_cpp( wz_weights, pred_dim, 0, 
+        index$row.index-1, index$col.index-1 ),
+    cpp12 = m2a_cpp_new( wz_weights, pred_dim, 0, 
+        index$row.index-1, index$col.index-1 ),
+    # c++ but using matrix indexing
+    # cpp2 = m2a_cpp_x( wz_weights, t(index_matrix-1), 0,
+    #     n_triangular_elements, N ),
+    # c++ but using cube indexing
+    # cpp3 = m2a_cpp_x2( wz_weights, rbind(t(index_matrix-1),0), 0,
+    #     n_triangular_elements, N ),
+    # cpp4 = m2a_cpp_x3( wz_weights, rbind(t(index_matrix-1),0), 0,
+    #     n_triangular_elements, N ),
+    times = 100
+)
+```
+
 ### Proposed solutions 2
 
 Next part of our solution is to separate the design matrix into components for matrix multiplication with the `chol(wz_weights)`.
 
 ```{r}
+wz_weights = wweights( fit, matrix.arg = TRUE, deriv.arg = FALSE )
+N = nrow( wz_weights )
+
 xmat = model.matrix(fit, type = "vlm")
 xmat_array = xmat_to_array( xmat, pred_dim )
 xmat_array[,,1:2]
@@ -250,3 +290,45 @@ microbenchmark::microbenchmark(
 ```
 
 We see that the c++ implementation is faster. It also is doing the Cholesky decomposition, whereas it is precomputed for the VGAM solution as `UU`.
+
+
+### Big dataset
+```{r}
+library( VGAM )
+library( Rcpp )
+sourceCpp( "cpp_implementations.cpp" )
+
+pneumo <- transform(pneumo, let = log(exposure.time))
+
+big_data_vglm = vglm(formula = cbind(normal, mild, severe) ~ let, 
+    family = acat, 
+    data = pneumo[rep(1:8, 1000),])
+big_M <- npred(big_data_vglm)
+big_nn <- nobs(big_data_vglm)
+big_wzedd <- weights(big_data_vglm, type = "working")
+# UU is matrix-band format
+big_UU <- vchol(big_wzedd, M = big_M, n = big_nn, silent = TRUE)
+big_X.vlm <- model.matrix(big_data_vglm, type = "vlm")
+big_UU.X.vlm <- mux111(cc = big_UU, xmat = big_X.vlm, M = big_M)
+index <- iam(NA, NA, big_M, both = TRUE, diag = TRUE)
+
+N = nrow( big_wzedd )
+n_triangular_elements = 1/2 * ( sqrt( 8 * ncol(big_wzedd) + 1 ) - 1 )
+index_matrix = cbind( index$row.index, index$col.index )
+
+microbenchmark::microbenchmark(
+    # VGAM = mux111(cc = big_UU, xmat = big_X.vlm, M = big_M),
+    VGAM2 = {
+        UU <- vchol(big_wzedd, M = big_M, n = big_nn, silent = TRUE)
+        mux111(cc = big_UU, xmat = big_X.vlm, M = big_M)
+    },
+    # cpp = mux111ccc_cpp( big_wzedd, big_X.vlm, big_M, 0,
+    #     index$row.index-1, index$col.index-1 ),
+    cpp_ = mux111ccc_cpp_( big_wzedd, big_X.vlm, big_M, 0,
+        index$row.index-1, index$col.index-1 ),
+    # cpp2 = mux111ccc_cpp2( big_wzedd, big_X.vlm, big_M, t(index_matrix-1), 0,
+    #     n_triangular_elements, N ),
+    times = 100
+)
+
+```
